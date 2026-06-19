@@ -1,0 +1,11 @@
+# Ambientes virtuais (para não subir a pasta pesada de bibliotecas)
+venv/
+env/
+.venv/
+
+# Variáveis de ambiente (ISSO AQUI É DE FATO A REGRA DE OURO, NUNCA SUBA O .env)
+.env
+
+# Arquivos compilados do Python
+__pycache__/
+*.pyc
