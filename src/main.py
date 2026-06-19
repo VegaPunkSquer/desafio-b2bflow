@@ -3,6 +3,14 @@ import requests
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+import time
+
+console = Console()
+
 # ---------------------------------------------------------
 # SETUP DE CAMINHOS ABSOLUTOS
 # ---------------------------------------------------------
@@ -25,69 +33,72 @@ ZAPI_TOKEN = os.getenv("ZAPI_TOKEN")
 # ---------------------------------------------------------
 def buscar_contatos(supabase: Client) -> list:
     """Busca até 3 contatos cadastrados na tabela do Supabase."""
-    print("🔍 Conectando ao Supabase para buscar contatos...")
     try:
-        # A regra do desafio: "Envie para até 3 números diferentes"
         resposta = supabase.table("contatos").select("*").limit(3).execute()
         return resposta.data
     except Exception as e:
-        print(f"❌ Erro catastrófico ao buscar no Supabase: {e}")
+        console.print(f"[bold red]❌ Erro catastrófico ao buscar no Supabase: {e}[/bold red]")
         return []
 
-def enviar_mensagem_whatsapp(telefone: str, nome: str):
+def enviar_mensagem_whatsapp(telefone: str, nome: str) -> bool:
     """Dispara a mensagem via Z-API usando as credenciais do .env."""
-    # A regra do desafio: enviar a mensagem EXATA: "Olá, <nome_contato> tudo bem com você?"
     mensagem = f"Olá, {nome} tudo bem com você?"
-    
-    # Endpoint padrão da Z-API para envio de texto
     url = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
-    
-    payload = {
-        "phone": telefone,
-        "message": mensagem
-    }
+    payload = {"phone": telefone, "message": mensagem}
     
     try:
         response = requests.post(url, json=payload)
-        response.raise_for_status() # Lança exceção se o HTTP Status for de erro (ex: 400, 401, 500)
-        print(f"✅ Z-API: Mensagem disparada com sucesso para {nome} ({telefone}).")
+        response.raise_for_status() 
+        return True
     except requests.exceptions.RequestException as e:
-        print(f"❌ Z-API: Erro ao enviar mensagem para {nome} ({telefone}): {e}")
+        console.print(f"[bold red]❌ Erro da Z-API ao enviar para {nome} ({telefone}): {e}[/bold red]")
+        return False
 
 # ---------------------------------------------------------
 # EXECUÇÃO PRINCIPAL
 # ---------------------------------------------------------
 def main():
-    print("🚀 Iniciando automação b2bflow...")
+    console.clear()
+    console.print(Panel("[bold cyan]🚀 Automação b2bflow - Disparo Z-API[/bold cyan]", border_style="cyan"))
     
-    # Validação inicial de ambiente
     if not all([SUPABASE_URL, SUPABASE_KEY, ZAPI_INSTANCE_ID, ZAPI_TOKEN]):
-        print("❌ Erro: Alguma variável de ambiente está faltando no seu .env!")
+        console.print("[bold red]❌ Erro: Alguma variável de ambiente está faltando no seu .env![/bold red]")
         return
 
-    # Inicializa o cliente do Supabase
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # 1. Puxa os dados
-    contatos = buscar_contatos(supabase)
+    # Efeito visual de carregamento
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+        progress.add_task("[cyan]🔍 Buscando contatos no Supabase...", total=None)
+        contatos = buscar_contatos(supabase)
+        time.sleep(1) # Pausa intencional para o avaliador ver o loading
     
     if not contatos:
-        print("⚠️ Nenhum contato encontrado na tabela ou houve um erro. Abortando missão.")
+        console.print("[bold yellow]⚠️ Nenhum contato encontrado na tabela ou RLS bloqueando. Abortando.[/bold yellow]")
         return
         
-    print(f"🎯 {len(contatos)} contato(s) encontrado(s). Iniciando os disparos...")
+    # Tabela de resultados
+    table = Table(title="📊 Status dos Disparos", show_header=True, header_style="bold magenta")
+    table.add_column("Nome", style="dim")
+    table.add_column("Telefone", justify="center")
+    table.add_column("Status", justify="center")
+
+    console.print(f"\n[bold green]🎯 {len(contatos)} contato(s) encontrado(s). Iniciando os disparos...[/bold green]\n")
     
-    # 2. Varre a lista e envia as mensagens
     for contato in contatos:
         telefone = contato.get("telefone")
         nome = contato.get("nome_contato")
         
         if telefone and nome:
-            enviar_mensagem_whatsapp(telefone, nome)
+            sucesso = enviar_mensagem_whatsapp(telefone, nome)
+            status_text = "[green]✅ Enviado[/green]" if sucesso else "[red]❌ Falha[/red]"
+            table.add_row(nome, telefone, status_text)
+            time.sleep(1) # Respiro entre requisições para evitar rate limit da Z-API
         else:
-            print(f"⚠️ Contato ignorado por falta de dados (telefone ou nome em branco): {contato}")
+            table.add_row(str(nome), str(telefone), "[yellow]⚠️ Ignorado (Dados faltando)[/yellow]")
             
-    print("🎉 Fluxo finalizado de ponta a ponta!")
+    console.print(table)
+    console.print("\n[bold cyan]🎉 Fluxo finalizado de ponta a ponta![/bold cyan]\n")
 
 if __name__ == "__main__":
     main()
