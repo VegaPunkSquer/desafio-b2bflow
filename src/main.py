@@ -8,6 +8,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 import time
+from rich.prompt import Prompt
 
 console = Console()
 
@@ -40,9 +41,8 @@ def buscar_contatos(supabase: Client) -> list:
         console.print(f"[bold red]❌ Erro catastrófico ao buscar no Supabase: {e}[/bold red]")
         return []
 
-def enviar_mensagem_whatsapp(telefone: str, nome: str) -> bool:
+def enviar_mensagem_whatsapp(telefone: str, nome: str, mensagem: str) -> bool:
     """Dispara a mensagem via Z-API usando as credenciais do .env."""
-    mensagem = f"Olá, {nome} tudo bem com você?"
     url = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
     payload = {"phone": telefone, "message": mensagem}
     
@@ -71,34 +71,66 @@ def main():
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
         progress.add_task("[cyan]🔍 Buscando contatos no Supabase...", total=None)
         contatos = buscar_contatos(supabase)
-        time.sleep(1) # Pausa intencional para o avaliador ver o loading
+        time.sleep(1) # Pausa intencional
     
     if not contatos:
         console.print("[bold yellow]⚠️ Nenhum contato encontrado na tabela ou RLS bloqueando. Abortando.[/bold yellow]")
         return
         
+    # 1. Filtra os contatos zoados (ignora os que tem nome ou telefone vazios)
+    contatos_validos = [c for c in contatos if c.get("nome_contato") and c.get("telefone")]
+
+    if not contatos_validos:
+        console.print("[bold yellow]⚠️ Só tinha contato com dados faltando. Abortando.[/bold yellow]")
+        return
+
+    console.print(f"\n[bold green]🎯 {len(contatos_validos)} contato(s) válido(s) encontrado(s).[/bold green]\n")
+
+    # 2. UX TOP: Escolha de contato
+    console.print("[0] 🚀 Enviar para TODOS")
+    for i, contato in enumerate(contatos_validos, 1):
+        console.print(f"[{i}] {contato['nome_contato']} - {contato['telefone']}")
+        
+    escolha = Prompt.ask("\n[cyan]Digite os números (ex: 1,3 para múltiplos, ou 0 para todos)[/cyan]")
+    
+    try:
+        if escolha.strip() == '0':
+            selecionados = contatos_validos
+        else:
+            # Pega os índices, separa por vírgula, converte pra int e ajusta para a lista (subtrai 1)
+            indices = [int(x.strip()) - 1 for x in escolha.split(',')]
+            selecionados = [contatos_validos[i] for i in indices if 0 <= i < len(contatos_validos)]
+    except (ValueError, IndexError):
+        console.print("[bold red]❌ Opção inválida. Digite apenas números correspondentes. Abortando.[/bold red]")
+        return
+
+    # 3. UX TOP: Edição da mensagem (com a padrão da vaga como default)
+    console.print("\n[dim]A mensagem padrão exigida pela vaga é: 'Olá, {nome} tudo bem com você?'[/dim]")
+    msg_base = Prompt.ask("[cyan]Digite a nova mensagem (use {nome} para personalizar), ou aperte ENTER para a padrão[/cyan]", default="Olá, {nome} tudo bem com você?")
+
     # Tabela de resultados
     table = Table(title="📊 Status dos Disparos", show_header=True, header_style="bold magenta")
     table.add_column("Nome", style="dim")
     table.add_column("Telefone", justify="center")
     table.add_column("Status", justify="center")
-
-    console.print(f"\n[bold green]🎯 {len(contatos)} contato(s) encontrado(s). Iniciando os disparos...[/bold green]\n")
     
-    for contato in contatos:
-        telefone = contato.get("telefone")
-        nome = contato.get("nome_contato")
+    console.print("\n[bold green]🚀 Iniciando disparos...[/bold green]\n")
+
+    for contato in selecionados:
+        telefone = contato["telefone"]
+        nome = contato["nome_contato"]
         
-        if telefone and nome:
-            sucesso = enviar_mensagem_whatsapp(telefone, nome)
-            status_text = "[green]✅ Enviado[/green]" if sucesso else "[red]❌ Falha[/red]"
-            table.add_row(nome, telefone, status_text)
-            time.sleep(1) # Respiro entre requisições para evitar rate limit da Z-API
-        else:
-            table.add_row(str(nome), str(telefone), "[yellow]⚠️ Ignorado (Dados faltando)[/yellow]")
+        # Substitui a tag {nome} pelo nome real do banco
+        mensagem_final = msg_base.replace("{nome}", nome)
+        
+        sucesso = enviar_mensagem_whatsapp(telefone, nome, mensagem_final)
+        status_text = "[green]✅ Enviado[/green]" if sucesso else "[red]❌ Falha[/red]"
+        table.add_row(nome, telefone, status_text)
+        time.sleep(1) 
             
     console.print(table)
     console.print("\n[bold cyan]🎉 Fluxo finalizado de ponta a ponta![/bold cyan]\n")
+# ------------------------------------------
 
 if __name__ == "__main__":
     main()
