@@ -43,15 +43,47 @@ def buscar_contatos(supabase: Client) -> list:
 
 def enviar_mensagem_whatsapp(telefone: str, nome: str, mensagem: str) -> bool:
     """Dispara a mensagem via Z-API usando as credenciais do .env."""
-    url = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
-    payload = {"phone": telefone, "message": mensagem}
+    
+    # 1. Limpeza contra espaços invisíveis
+    instance_id = ZAPI_INSTANCE_ID.strip()
+    token = ZAPI_TOKEN.strip()
+    
+    # 2. A correção do bug da URL duplicada (trata se você colou a URL inteira no .env)
+    if instance_id.startswith("http"):
+        instance_id = instance_id.rstrip('/')
+        url = f"{instance_id}/token/{token}/send-text"
+    else:
+        url = f"https://api.z-api.io/instances/{instance_id}/token/{token}/send-text"
+        
+    payload = {
+        "phone": telefone,
+        "message": mensagem
+    }
+    
+    headers = {
+        "Client-Token": token,
+        "Content-Type": "application/json"
+    }
     
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, headers=headers)
+        
+        # Pega a resposta bruta da API para debug e validação
+        try:
+            dados_resposta = response.json()
+            console.print(f"   [dim]↳ RAW Z-API: {dados_resposta}[/dim]")
+        except ValueError:
+            dados_resposta = {}
+        
+        # 3. Blinda o falso positivo: se vier a palavra "error" no JSON da Z-API, falha o envio.
+        if isinstance(dados_resposta, dict) and "error" in dados_resposta:
+             return False
+             
         response.raise_for_status() 
         return True
+        
     except requests.exceptions.RequestException as e:
-        console.print(f"[bold red]❌ Erro da Z-API ao enviar para {nome} ({telefone}): {e}[/bold red]")
+        console.print(f"[bold red]❌ Erro HTTP ao enviar para {nome} ({telefone}): {e}[/bold red]")
         return False
 
 # ---------------------------------------------------------
